@@ -50,7 +50,6 @@ Thumbs.db
 # --- Windows ---
 *.exe
 *.msi
-*.ps1
 
 # Evitar subir virtualenvs
 venv/
