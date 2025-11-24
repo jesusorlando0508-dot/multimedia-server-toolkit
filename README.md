@@ -48,8 +48,8 @@ Plataforma híbrida (Python + Node.js) para indexar bibliotecas de anime/pelícu
 
 1. **Clona el repositorio**
    ```powershell
-   git clone https://github.com/<tu-usuario>/multimediaserver.git
-   cd multimediaserver
+   git clone https://github.com/jesusorlando0508-dot/multimedia-server-toolkit.git
+   cd multimedia-server-toolkit
    ```
 2. **Crea y activa el entorno virtual**
    ```powershell
