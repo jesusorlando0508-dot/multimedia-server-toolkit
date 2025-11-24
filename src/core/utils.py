@@ -56,8 +56,14 @@ def limpiar_traduccion(texto: str, ui_queue: Optional[queue.Queue] = None, label
     texto = texto.strip('"\'')
 
     if texto != texto_original:
-        aviso = f"⚠ Se eliminaron frases de traducción:\n'{texto_original}' → '{texto}'"
-        print(aviso)
+        aviso = f"[AVISO] Se eliminaron frases de traducción:\n'{texto_original}' → '{texto}'"
+        try:
+            print(aviso)
+        except UnicodeEncodeError:
+            safe_aviso = aviso.encode('ascii', errors='replace').decode('ascii', errors='replace')
+            print(safe_aviso)
+        except Exception:
+            logging.debug("No se pudo mostrar aviso de traducción", exc_info=True)
         if ui_queue and label:
             try:
                 if hasattr(ui_queue, 'put'):

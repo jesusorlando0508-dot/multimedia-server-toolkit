@@ -1,0 +1,58 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos temporales / cache del programa
+*.log
+*.tmp
+*.bak
+
+# Cachés internos de tu app
+.vista/
+.cache/
+*.cache
+
+# Configs locales que NO deben ir al repo
+config.json
+*.env
+.env
+*.secrets.json
+
+# Directorios generados por tu app
+backups/
+**/backups/
+**/.vista/
+**/.cache/
+
+# Archivos generados por el usuario o por la GUI
+*.json.bak*
+*.old
+*.db
+
+# --- Node.js ---
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Builds/outputs del server
+dist/
+build/
+
+# --- Sistema ---
+.DS_Store
+Thumbs.db
+
+# --- Visual Studio Code ---
+.vscode/
+
+# --- Windows ---
+*.exe
+*.msi
+*.ps1
+
+# Evitar subir virtualenvs
+venv/
+ENV/
+env/
