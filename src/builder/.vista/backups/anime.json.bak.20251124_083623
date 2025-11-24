@@ -1,0 +1,18 @@
+[
+  {
+    "title": "Accel World",
+    "link": "/pages/accel_world.html",
+    "image": "/media/Accel World/1.jpg",
+    "genres": [
+      "Acción",
+      "Romance",
+      "Ciencia ficción",
+      "School",
+      "Video Game"
+    ],
+    "type": "anime",
+    "idioma": "Japonés",
+    "synopsis": "Haruyuki Arita es una estudiante de secundaria con sobrepeso y acoso que encuentra consuelo en jugar juegos en línea. Pero su vida toma un giro drástico un día, cuando descubre que todos sus altos puntajes han sido coronados por Kuroyukihime, la popular vicepresidenta del consejo estudiantil. Ella luego lo invita a la sala de estudiantes y le presenta a \"Brain Burst\", un programa que permite a los usuarios acelerar sus ondas cerebrales hasta el punto en que el tiempo parece detenerse. Brain Burst también funciona como un juego de lucha de realidad aumentada, y para conseguir más puntos para acelerar, los usuarios deben ganar duelos contra otros jugadores. Sin embargo, si un usuario pierde todos sus puntos, también perderá acceso a Brain Burst para siempre. Kuroyukihime explica que eligió mostrar a Haruyuki el programa porque necesita su ayuda. Ella quiere conocer al creador de Brain Burst y descubrir la razón por la que fue creado, pero eso es más fácil decirlo; para hacerlo, debe derrotar a los \"Seis Reyes de Color Puro\", líderes de la facción dentro del juego, y alcanzar el nivel más alto posible.",
+    "short_synopsis": "Haruyuki Arita es una estudiante de secundaria con sobrepeso y acoso que encuentra consuelo en jugar juegos en línea. Pero su vida toma un giro drástico un día, cuando descubre que todos sus altos puntajes han sido coronados por Kuroyukihime, la…"
+  }
+]
