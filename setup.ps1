@@ -58,6 +58,10 @@ function Get-PythonExe {
     <StackPanel Grid.Column="1" Margin="6">
       <TextBlock FontSize="16" FontWeight="Bold">Registro / Estado</TextBlock>
       <TextBox x:Name="TbLog" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" Height="420" IsReadOnly="True"/>
+      <StackPanel Margin="0,8,0,0">
+        <ProgressBar x:Name="PbProgress" Height="18" Minimum="0" Maximum="100" />
+        <TextBlock x:Name="TbStatus" Margin="0,4,0,0" FontStyle="Italic" />
+      </StackPanel>
 
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
         <Button x:Name="BtnOpenRoot" Width="120" Margin="2">Abrir raíz</Button>
@@ -84,13 +88,94 @@ $BtnStart = $window.FindName('BtnStart')
 $TbLog = $window.FindName('TbLog')
 $BtnOpenRoot = $window.FindName('BtnOpenRoot')
 $BtnExit = $window.FindName('BtnExit')
+$PbProgress = $window.FindName('PbProgress')
+$TbStatus = $window.FindName('TbStatus')
 
-function Log-Info([string]$s) {
-    $TbLog.Dispatcher.Invoke([action]{ 
-        $TbLog.AppendText((Get-Date -Format "HH:mm:ss") + " - " + $s + "`r`n") 
+function Log-Info {
+    param(
+        [string]$Message
+    )
+    $TbLog.Dispatcher.Invoke([action]{
+        $TbLog.AppendText((Get-Date -Format "HH:mm:ss") + " - " + $Message + "`r`n")
         $TbLog.ScrollToEnd()
     }) | Out-Null
 }
+
+function Update-ProgressUI {
+    param(
+        [double]$Percent,
+        [string]$StatusText
+    )
+    if ($Percent -lt 0) { $Percent = 0 }
+    if ($Percent -gt 100) { $Percent = 100 }
+    if ($PbProgress) {
+        $PbProgress.Dispatcher.Invoke([action]{ $PbProgress.Value = $Percent }) | Out-Null
+    }
+    if ($TbStatus -and $StatusText) {
+        $TbStatus.Dispatcher.Invoke([action]{ $TbStatus.Text = $StatusText }) | Out-Null
+    }
+}
+
+function Process-JobOutput {
+    param(
+        [string]$Line
+    )
+    if ([string]::IsNullOrWhiteSpace($Line)) { return }
+    if ($Line.StartsWith('__PROGRESS__|')) {
+        $parts = $Line.Split('|',3)
+        if ($parts.Length -ge 3) {
+            $pct = 0
+            [double]::TryParse($parts[1], [ref]$pct) | Out-Null
+            $msg = $parts[2]
+            Update-ProgressUI -Percent $pct -StatusText $msg
+        }
+        return
+    }
+    Log-Info $Line
+}
+
+function Initialize-MediaAllPath {
+    if (-not [string]::IsNullOrWhiteSpace($TbMediaAll.Text)) { return }
+    $defaultMedia = Join-Path (Get-Location).Path 'media_all'
+    $TbMediaAll.Text = $defaultMedia
+    Log-Info "📁 Carpeta destino media_all detectada automáticamente: $defaultMedia"
+}
+
+Update-ProgressUI -Percent 0 -StatusText 'En espera de iniciar instalación.'
+Initialize-MediaAllPath
+
+$script:ActiveJob = $null
+$script:JobMonitor = New-Object System.Windows.Threading.DispatcherTimer
+$script:JobMonitor.Interval = [TimeSpan]::FromMilliseconds(700)
+$script:JobMonitor.add_Tick({
+    if (-not $script:ActiveJob) {
+        $script:JobMonitor.Stop()
+        return
+    }
+    $lines = Receive-Job -Job $script:ActiveJob -ErrorAction SilentlyContinue
+    foreach ($line in $lines) { Process-JobOutput $line }
+    if ($script:ActiveJob.State -in @('Completed','Failed','Stopped')) {
+        $remaining = Receive-Job -Job $script:ActiveJob -ErrorAction SilentlyContinue
+        foreach ($line in $remaining) { Process-JobOutput $line }
+        switch ($script:ActiveJob.State) {
+            'Completed' {
+                Update-ProgressUI -Percent 100 -StatusText 'Instalación completada.'
+                Log-Info "✅ Job de instalación finalizado correctamente."
+            }
+            'Failed' {
+                Update-ProgressUI -Percent 100 -StatusText 'Job falló.'
+                Log-Info "❌ Job de instalación falló. Revisa los mensajes anteriores para detalles."
+            }
+            Default {
+                Update-ProgressUI -Percent 100 -StatusText "Job detenido ($($script:ActiveJob.State))."
+                Log-Info "⚠ Job de instalación detenido (estado: $($script:ActiveJob.State))."
+            }
+        }
+        Remove-Job $script:ActiveJob | Out-Null
+        $script:ActiveJob = $null
+        $script:JobMonitor.Stop()
+    }
+})
 
 function Browse-Folder([string]$title) {
     $f = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -164,6 +249,10 @@ $BtnExit.Add_Click({ $window.Close() })
 $BtnStart.Add_Click({
 
     Log-Info "▶ Iniciando pipeline de instalación..."
+    if ($script:ActiveJob -and ($script:ActiveJob.State -notin @('Completed','Failed','Stopped'))) {
+        Log-Info "⚠ Ya existe una instalación en curso. Espera a que finalice antes de iniciar otra."
+        return
+    }
 
     if ($LbRoots.Items.Count -eq 0) { 
         Log-Info "❌ Debes agregar al menos una ruta raíz antes de continuar."
@@ -225,22 +314,29 @@ $BtnStart.Add_Click({
         param($roots, $mediaAll, $pythonCmd, $projectRoot)
 
         function JLog([string]$m) { "$(Get-Date -Format 'HH:mm:ss') - $m" }
+        function JProgress([double]$pct, [string]$msg) {
+            Write-Output "__PROGRESS__|$pct|$msg"
+        }
 
         Set-Location $projectRoot
         Write-Output (JLog "➡ Job iniciado. Proyecto en: $projectRoot")
+        JProgress 5 "Preparando entorno en $projectRoot"
 
         #
         # Paso 2: Crear venv
         #
         Write-Output (JLog "🐍 [1/6] Creando entorno virtual (venv)...")
+        JProgress 12 "Creando entorno virtual (venv)..."
         & $pythonCmd -m venv (Join-Path $projectRoot 'venv')
 
         $venvPython = Join-Path $projectRoot 'venv\\Scripts\\python.exe'
         if (-not (Test-Path $venvPython)) { 
             Write-Output (JLog "❌ venv Python no encontrado en: $venvPython. Abortando job.")
+            JProgress 100 "Error: venv Python no encontrado."
             exit 1 
         }
         Write-Output (JLog "✅ venv creado correctamente. Python venv: $venvPython")
+        JProgress 22 "Entorno virtual creado."
 
         #
         # Paso 3: Instalar requirements
@@ -248,16 +344,20 @@ $BtnStart.Add_Click({
         $req = Join-Path $projectRoot 'requirements.txt'
         if (Test-Path $req) {
             Write-Output (JLog "📦 [2/6] Instalando dependencias Python desde requirements.txt...")
+            JProgress 32 "Instalando dependencias Python..."
             & $venvPython -m pip install -r $req
             Write-Output (JLog "✅ Dependencias Python instaladas.")
+            JProgress 40 "Dependencias Python instaladas."
         } else {
             Write-Output (JLog "ℹ requirements.txt no encontrado, se omite instalación de dependencias Python.")
+            JProgress 32 "Sin requirements.txt, se continua."
         }
 
         #
         # Paso 4: Crear package.json
         #
         Write-Output (JLog "📄 [3/6] Generando package.json para servidor Node...")
+        JProgress 45 "Generando package.json..."
         $pkg = @'
 {
   "name": "vista-server",
@@ -277,6 +377,7 @@ $BtnStart.Add_Click({
         # Paso 5: Generar server.js
         #
         Write-Output (JLog "🖥 [4/6] Generando server.js (servidor Express)...")
+        JProgress 50 "Generando server.js..."
         $serverJs = @'
 import express from "express";
 import fs from "fs";
@@ -374,20 +475,24 @@ app.listen(PORT, '0.0.0.0', () => {
 '@
         Set-Content -LiteralPath (Join-Path $projectRoot 'server.js') -Value $serverJs -Encoding UTF8
         Write-Output (JLog "✅ server.js generado.")
+        JProgress 55 "server.js listo."
 
         #
         # Paso 6: npm install
         #
         Write-Output (JLog "📦 [5/6] Ejecutando npm install (esto puede tardar)...")
+        JProgress 60 "Ejecutando npm install..."
         Push-Location $projectRoot
         npm install
         Pop-Location
         Write-Output (JLog "✅ npm install completado.")
+        JProgress 70 "Dependencias npm instaladas."
 
         #
         # Paso 7: Crear media_all + junctions
         #
         Write-Output (JLog "🗂 [6/6] Creando media_all y junctions desde rutas raíz seleccionadas...")
+        JProgress 75 "Preparando media_all y enlaces..."
         if (-not (Test-Path $mediaAll)) {
             Write-Output (JLog "📁 media_all no existe. Creando en: $mediaAll")
             New-Item -ItemType Directory -Path $mediaAll | Out-Null
@@ -412,11 +517,13 @@ app.listen(PORT, '0.0.0.0', () => {
                 }
             }
         }
+        JProgress 82 "media_all configurado."
 
         #
         # Paso 8: Guardar config .vista/config.json
         #
         Write-Output (JLog "💾 Guardando configuración en .vista/config.json ...")
+        JProgress 86 "Guardando configuración..."
         $cfgDir = Join-Path $projectRoot '.vista'
         if (-not (Test-Path $cfgDir)) { 
             New-Item -ItemType Directory -Path $cfgDir | Out-Null 
@@ -426,30 +533,24 @@ app.listen(PORT, '0.0.0.0', () => {
         $cfgObj | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $cfgDir 'config.json') -Encoding UTF8
 
         Write-Output (JLog "✅ Configuración guardada correctamente.")
+        JProgress 90 "Configuración guardada."
 
         #
         # Paso 9: Ejecutar generador Python
         #
         Write-Output (JLog "🧬 Ejecutando generador Python: python -m src.main (dentro del venv)...")
+        JProgress 94 "Ejecutando generador Python..."
         & $venvPython -m src.main
         Write-Output (JLog "✅ Generador Python completado.")
+        JProgress 100 "Instalación completada."
 
         Write-Output (JLog "🎉 INSTALACIÓN COMPLETA. Proyecto listo para usar.")
     } -ArgumentList ($roots, $TbMediaAll.Text, $pythonCmd, $projectRoot)
 
-    Register-ObjectEvent -InputObject $job -EventName StateChanged -Action {
-        $st = $event.SourceEventArgs.JobStateInfo.State
-        if ($st -eq 'Completed') {
-            $out = Receive-Job $job -Keep
-            foreach ($l in $out) { Log-Info $l }
-            Log-Info "✅ Job de instalación finalizado correctamente."
-            Remove-Job $job | Out-Null
-        } elseif ($st -eq 'Failed') {
-            $out = Receive-Job $job -Keep -ErrorAction SilentlyContinue
-            foreach ($l in $out) { Log-Info $l }
-            Log-Info "❌ Job de instalación falló. Revisa los mensajes anteriores para detalles."
-            Remove-Job $job | Out-Null
-        }
+    $script:ActiveJob = $job
+    Update-ProgressUI -Percent 5 -StatusText 'Job iniciado, preparando entorno...'
+    if (-not $script:JobMonitor.IsEnabled) {
+        $script:JobMonitor.Start()
     }
 
     Log-Info "⏳ Instalación en segundo plano iniciada. Sigue el log para ver el progreso..."
