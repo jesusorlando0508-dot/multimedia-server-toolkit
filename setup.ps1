@@ -468,9 +468,9 @@ app.get('/skip', (req, res) => {
   }
 });
 
-const PORT = 3000; 
-app.listen(PORT, '0.0.0.0', () => { 
-  console.log(`🚀 Server on: http://localhost:${PORT}`); 
+const port = process.env.PORT || 3000;
+app.listen(port, "0.0.0.0", () => {
+  console.log(`Servidor listo en LAN: http://<tu-ip-local>:${port}`);
 });
 '@
         Set-Content -LiteralPath (Join-Path $projectRoot 'server.js') -Value $serverJs -Encoding UTF8
