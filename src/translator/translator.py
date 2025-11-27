@@ -10,6 +10,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from src.core.config import config
+from src.translator.translator_batcher import run_batched_translation
 try:
     from src.core.app_state import ui_queue
 except Exception:
@@ -1232,7 +1233,27 @@ def translator_translate_batch(texts, label_estado=None):
                 df.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] translator_translate_batch: backend={tr.__class__.__name__} texts={len(texts)}\n")
         except Exception:
             pass
-        res = tr.translate_batch(texts)
+        try:
+            chunk_size = int(config.get('translator_batch_chunk_size', 20) or 20)
+        except Exception:
+            chunk_size = 20
+        try:
+            max_attempts = int(config.get('translator_batch_max_attempts', 3) or 3)
+        except Exception:
+            max_attempts = 3
+
+        fallback_translate = getattr(tr, 'translate', None)
+        if not callable(fallback_translate):
+            fallback_translate = None
+
+        res = run_batched_translation(
+            texts,
+            translator=tr,
+            label_estado=label_estado,
+            chunk_size=chunk_size,
+            max_attempts=max_attempts,
+            fallback_translate=fallback_translate,
+        )
         try:
             debug_file = config.get('debug_log_file') or 'debug.log'
             with open(debug_file, 'a', encoding='utf-8') as df:

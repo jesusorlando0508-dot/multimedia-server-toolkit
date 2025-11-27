@@ -703,17 +703,6 @@ def main():
                 entry_tmdb_gen.insert(0, p)
         tk.Button(inner, text='Seleccionar tmdb_gen', command=choose_tmdb_gen_path).pack(padx=10, pady=(0,4))
 
-        tk.Label(inner, text="Extractor module path:").pack(anchor='w', padx=10, pady=(8,0))
-        entry_extractor = tk.Entry(inner, width=60)
-        entry_extractor.insert(0, config.get('extractor_path', os.path.join(os.path.dirname(__file__), 'extractor_html2.2.py')))
-        entry_extractor.pack(padx=10, pady=2)
-        def choose_extractor_path():
-            p = filedialog.askopenfilename(title='Selecciona extractor module', filetypes=[('Python','*.py'),('All','*.*')])
-            if p:
-                entry_extractor.delete(0, 'end')
-                entry_extractor.insert(0, p)
-        tk.Button(inner, text='Seleccionar extractor', command=choose_extractor_path).pack(padx=10, pady=(0,4))
-
         tk.Label(inner, text="Cache directory (where .cache is stored):").pack(anchor='w', padx=10, pady=(8,0))
         entry_cache_dir = tk.Entry(inner, width=60)
         entry_cache_dir.insert(0, config.get('cache_dir', os.path.join(os.path.dirname(__file__), '.cache')))
@@ -770,10 +759,6 @@ def main():
             except Exception:
                 pass
             try:
-                config['extractor_path'] = entry_extractor.get().strip()
-            except Exception:
-                pass
-            try:
                 config['cache_dir'] = entry_cache_dir.get().strip()
             except Exception:
                 pass
@@ -810,27 +795,10 @@ def main():
             except Exception as e:
                 messagebox.showwarning('Cache', f'No se pudo limpiar la cache: {e}')
 
-        btn_frame = tk.Frame(ventana_ajustes)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text='Aplicar (sesión)', command=aplicar_ajustes).pack(side='left', padx=5)
-        tk.Button(btn_frame, text='Guardar', command=guardar_ajustes).pack(side='left', padx=5)
-        tk.Button(btn_frame, text='Limpiar cache', command=limpiar_cache).pack(side='left', padx=5)
-
     # The Ajustes action is available from the 'Archivo' menu. Remove the separate button to simplify the UI.
 
-    # Dev / Debug button (password-protected). Requires 'dev_password' in config to be set.
+    # Dev / Debug button (no password required).
     def abrir_dev_mode():
-        pwd = config.get('dev_password', '')
-        if not pwd:
-            messagebox.showwarning('Dev Mode', 'No hay contraseña configurada. Define "dev_password" en config.json para habilitar Dev Mode.')
-            return
-        entrada = simpledialog.askstring('Dev Mode', 'Introduce la contraseña de desarrollador:', show='*')
-        if not entrada:
-            return
-        if entrada != pwd:
-            messagebox.showerror('Dev Mode', 'Contraseña incorrecta.')
-            return
-        # Open debug panel
         open_debug_panel()
 
     tk.Button(frame, text="Dev Mode", command=abrir_dev_mode, font=("Arial", 10)).pack(pady=2)
@@ -991,7 +959,7 @@ def main():
             if not mod:
                 return
             base = base_var.get()
-            outp = out_var.get() or os.path.join(base, 'anime_info.json')
+            outp = out_var.get() or os.path.join(base, 'anime1_info.json')
             if not messagebox.askyesno('Confirmar', f'Escribir JSON en: {outp}\n¿Continuar?'):
                 return
 
@@ -1235,11 +1203,33 @@ def main():
         ventana.title("Seleccionar subcarpetas a procesar")
         ventana.geometry("600x700")
 
-        tk.Label(ventana, text="Selecciona las carpetas a procesar:", font=("Arial", 10, "bold")).pack(pady=6)
+        tk.Label(ventana, text="Selecciona las carpetas a procesar:", font=("Arial", 10, "bold")).pack(pady=(6,0))
+        search_frame = tk.Frame(ventana)
+        search_frame.pack(fill='x', padx=10, pady=(0,4))
+        tk.Label(search_frame, text="Buscar:").pack(side='left')
+        search_var = tk.StringVar()
+        tk.Entry(search_frame, textvariable=search_var, width=30).pack(side='left', padx=6, fill='x', expand=True)
+        tk.Button(search_frame, text="Limpiar", command=lambda: search_var.set("")).pack(side='right')
+
         listbox_subcarpetas = tk.Listbox(ventana, selectmode=tk.MULTIPLE, width=80, height=20)
         listbox_subcarpetas.pack(padx=10, pady=5, fill="both", expand=True)
-        for sc in subcarpetas:
-            listbox_subcarpetas.insert(tk.END, os.path.basename(sc))
+
+        displayed_subcarpetas = list(subcarpetas)
+
+        def refresh_listbox(*_):
+            nonlocal displayed_subcarpetas
+            term = search_var.get().strip().lower()
+            displayed_subcarpetas = []
+            listbox_subcarpetas.delete(0, tk.END)
+            for sc in subcarpetas:
+                name = os.path.basename(sc)
+                if term and term not in name.lower():
+                    continue
+                displayed_subcarpetas.append(sc)
+                listbox_subcarpetas.insert(tk.END, name)
+
+        search_var.trace_add('write', refresh_listbox)
+        refresh_listbox()
 
         idioma_seleccionado = tk.StringVar(value="Japonés")
         tk.Label(ventana, text="Selecciona idioma de los animes:", font=("Arial", 10)).pack(pady=(6,0))
@@ -1310,7 +1300,7 @@ def main():
                 preview_txt.insert('end', 'Selecciona al menos una carpeta para previsualizar.')
                 preview_txt.configure(state='disabled')
                 return
-            carpetas_sel = [subcarpetas[i] for i in indices]
+            carpetas_sel = [displayed_subcarpetas[i] for i in indices]
             for c in carpetas_sel:
                 preview_txt.insert('end', f"Carpeta: {os.path.basename(c)}\n")
                 if rename_var.get():
@@ -1341,7 +1331,7 @@ def main():
             if not indices:
                 messagebox.showwarning("Atención", "Selecciona al menos una carpeta.")
                 return
-            carpetas_seleccionadas = [subcarpetas[i] for i in indices]
+            carpetas_seleccionadas = [displayed_subcarpetas[i] for i in indices]
             ventana.destroy()
             # enable persistent control buttons for this run
             try:

@@ -31,6 +31,7 @@ from src.core.network import (
 )
 from src.core.app_state import gen_control
 from src.translator.translator import translator_translate, translator_translate_batch
+from src.synopsis_cleaner import clean_synopsis
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import simpledialog
 import queue as _queue
@@ -1347,7 +1348,7 @@ def crear_pagina(datos, carpeta_salida, nombre_pagina, ui_queue=None, auto_confi
                             display_genres.append(name)
             except Exception:
                 display_genres = []
-            # include any themes carried in datos (from earlier fetch)
+            # include any themes carried inside `datos` (from earlier fetch) to avoid extra API calls.
             try:
                 for t in (datos.get('themes') or []):
                     if t and t not in display_genres:
@@ -1410,6 +1411,8 @@ def crear_pagina(datos, carpeta_salida, nombre_pagina, ui_queue=None, auto_confi
         except Exception:
             logging.debug("crear_pagina: error while logging capitulos info")
 
+        if datos.get("sinopsis"):
+            datos["sinopsis"] = clean_synopsis(datos["sinopsis"], emit=lambda m: ui_queue.put(("debug_process", m)) if ui_queue else None)
         html_content = html_template.format(
             titulo=datos.get("titulo", ""),
             sinopsis=datos.get("sinopsis", ""),

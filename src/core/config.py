@@ -28,21 +28,21 @@ DEFAULT_CONFIG = {
     "BASE_PAGES_DIR": "",
     # New unified media root (contains anime and movies folders)
     "media_root_dir": "",
-    "json_link_prefix": "",
+    "json_link_prefix": "/pages/",
     # JSON y plantillas existentes en el proyecto
-    "anime_json_path": str(BASE / "anime.json"),
-    "movies_json_path": str(BASE / "movies.json"),
-    "extractor_anime_json_path": str(BASE / "anime_info.json"),
-    "template_path": str(BASE / "template.html"),
-    "tmdb_overrides_path": str(BASE / "tmdb_overrides.json"),
-    "tmdb_gen_path": str(BASE / "tmdb_gen.json"),
-    "extractor_path": str(BASE / "extractor_html2.2.py"),
-    "cache_dir": str(BASE / ".cache"),
+    "anime_json_path": "anime.json",
+    "movies_json_path": "movies.json",
+    "extractor_anime_json_path": "anime_info.json",
+    "template_path": "template.html",
+    "tmdb_overrides_path": "tmdb_overrides.json",
+    "tmdb_gen_path": "tmdb_gen.json",
+    "extractor_path": "extractor_html2.2.py",
+    "cache_dir": ".cache",
     # Opciones del programa
     "translator_backend": "auto",
     "translator_backend_preference": "auto",
     "translator_auto_download_models": False,
-    "translator_models_dir": str(BASE / "models"),
+    "translator_models_dir": "models",
     "local_marian_model_name": "Helsinki-NLP/opus-mt-en-es",
     "local_marian_model_path": "",
     "aventiq_model_name": "AventIQ-AI/English-To-Spanish",
@@ -50,7 +50,7 @@ DEFAULT_CONFIG = {
     "translator_models_setup_done": False,
     "metadata_provider": "jikan",
     # default dev password so Dev Mode can be used without manual edits
-    "dev_password": "1234",
+    "dev_password": "",
     # mark whether initial configuration GUI was shown/saved
     "config_initialized": False,
     # debug level default (DEBUG to provide detailed module+translator logs)
@@ -77,8 +77,8 @@ DEFAULT_CONFIG = {
     # JSON backup retention in `.vista/backups`
     "json_backup_keep": 10,
     # Translator generation tuning
-    "translator_gen_num_beams": 2,
-    "translator_gen_max_length": 2048,
+    "translator_gen_num_beams": 3,
+    "translator_gen_max_length": 2056,
     "translator_early_stopping": True,
     "translator_device": "cpu",
     "torch_num_threads": 2,

@@ -1,3 +1,4 @@
+import argparse
 import os
 import json
 import threading
@@ -27,6 +28,7 @@ from urllib3.util.retry import Retry
 from PIL import Image, ImageTk
 import time
 import random
+from pathlib import Path
 
 # logging: start with INFO, later adjust based on config
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -59,7 +61,7 @@ def create_session_with_retries(total_retries=3, backoff_factor=0.5, status_forc
 session = create_session_with_retries()
 
 # Load config and network helpers from modules
-from src.core.config import config, save_config
+from src.core.config import APP_DIR, config, save_config
 try:
     # Honor debug level from config (set after config is loaded)
     lvl = str(config.get('debug_level', 'INFO')).upper()
@@ -91,6 +93,25 @@ try:
     import psutil as _psutil_mod
 except Exception:
     _psutil_mod = None
+
+from src.helpers.logging_utils import (
+    RunnerContext,
+    collect_system_metrics,
+    configure_rich_logging,
+    detect_new_folders,
+    friendly_banner,
+    friendly_footer,
+    get_console,
+    load_state,
+    measure_provider_latencies,
+    render_dashboard,
+    render_new_folders_table,
+    resolve_log_dir,
+    resolve_log_level,
+    save_state,
+    timed,
+    validate_paths_with_feedback,
+)
 
 
 def traducir_texto(texto: str, label_estado=None) -> str:
@@ -153,6 +174,7 @@ from tkinter import filedialog as _filedialog, simpledialog as _simpledialog
 from src.core.config import save_config as _save_config
 
 
+@timed("sondeo de recursos")
 def run_resource_probe_once(cfg):
     """Detect system resources a single time before the first configuration run."""
     try:
@@ -198,6 +220,7 @@ def run_resource_probe_once(cfg):
         logging.debug("Resource probe failed: %s", e)
 
 
+@timed("configuracion inicial")
 def ensure_initial_paths():
     """Prompt the user for required input/output paths on first run.
 
@@ -240,20 +263,102 @@ def ensure_initial_paths():
     # nothing to do if config already has required keys
 
 
-if __name__ == "__main__":
-    # Prompt for important paths before launching the main UI so defaults are not used.
+def _build_runner_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Runner amigable para el servidor multimedia")
+    parser.add_argument("--debug", action="store_true", help="Activa mensajes detallados para desarrolladores")
+    parser.add_argument("--trace", action="store_true", help="Muestra trazas completas y nivel raw")
+    parser.add_argument("--silent", action="store_true", help="Reduce los mensajes a lo esencial")
+    parser.add_argument("--media-root", dest="media_root", help="Ruta manual para la carpeta de medios")
+    parser.add_argument("--state-file", dest="state_file", help="Ruta personalizada para state.json")
+    parser.add_argument("--skip-ui", action="store_true", help="Omite el lanzamiento de la GUI (solo validaciones)")
+    return parser
+
+
+def _resolve_state_path(override: str | None = None) -> Path:
+    if override:
+        return Path(override)
+    return Path(config.get('state_file') or APP_DIR / "state.json")
+
+
+def _run_program_flow():
     try:
         ensure_initial_paths()
     except Exception:
-        pass
-    # Kick off background loading of the local translation model to avoid
-    # blocking the UI on the first translation request.
+        logging.exception("No se pudieron preparar las rutas iniciales")
     if config.get('preload_translator_on_start', True):
         try:
             start_background_model_load()
         except Exception:
-            pass
+            logging.debug("Fallo precarga del traductor", exc_info=True)
     ui_main()
+
+
+def _collect_runner_context(args) -> tuple[RunnerContext, Path, int]:
+    console = get_console()
+    log_dir = resolve_log_dir(config.get('debug_log_dir'))
+    level = resolve_log_level(
+        debug=bool(args.debug),
+        trace=bool(args.trace),
+        silent=bool(args.silent),
+        default_level=config.get('debug_level'),
+    )
+    configure_rich_logging(level=level, log_dir=log_dir, silent=bool(args.silent), console=console, rich_tracebacks=bool(args.trace))
+    return RunnerContext(console=console, silent=bool(args.silent)), log_dir, level
+
+
+def _render_dashboards(context: RunnerContext, phase: str, new_count: int):
+    metrics = collect_system_metrics()
+    latencies = measure_provider_latencies({"Jikan": f"{API_BASE}", "TMDB": f"{TMDB_API_BASE}"})
+    render_dashboard(context, phase=phase, metrics=metrics, latencies=latencies, new_count=new_count)
+
+
+def runner_entry(argv: list[str] | None = None) -> int:
+    parser = _build_runner_parser()
+    args = parser.parse_args(argv)
+    context, _, _ = _collect_runner_context(args)
+    friendly_banner(
+        context,
+        title="Hola, manada multimedia",
+        subtitle="Calentando patitas para explorar tus carpetas",
+        emoji="🐶",
+    )
+
+    media_root = args.media_root or config.get('media_root_dir')
+    pages_dir = config.get('pages_output_dir') or config.get('BASE_PAGES_DIR')
+    valid, _ = validate_paths_with_feedback(
+        context,
+        (
+            ("Media root", media_root),
+            ("Directorio de páginas", pages_dir),
+        ),
+    )
+    if not valid:
+        logging.warning("Faltan rutas esenciales, se abrirá la GUI de configuración si aplica")
+
+    state_path = _resolve_state_path(args.state_file)
+    state = load_state(state_path)
+    processed = state.get('processed_folders', [])
+    new_folders, seen_folders = detect_new_folders(media_root, processed)
+    render_new_folders_table(context, new_folders)
+    _render_dashboards(context, "Inicio", len(new_folders))
+
+    start_time = time.perf_counter()
+    exit_code = 0
+    if not args.skip_ui:
+        try:
+            _run_program_flow()
+        except Exception as exc:
+            exit_code = 1
+            logging.exception("La ejecución principal falló", exc_info=exc)
+    elapsed = time.perf_counter() - start_time
+    save_state(state_path, seen_folders)
+    _render_dashboards(context, "Despedida", len(new_folders))
+    friendly_footer(context, elapsed, summary="Gracias por dejarme cuidar tu biblioteca 🐾")
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(runner_entry())
 
 
 def detect_system_resources() -> dict:

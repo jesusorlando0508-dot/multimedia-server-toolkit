@@ -6,6 +6,7 @@ project folder is located.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -20,5 +21,18 @@ def ensure_project_root_on_path() -> None:
         sys.path.insert(0, root_str)
 
 
-# Execute on import so that simply importing this module bootstraps the path.
+def _install_rich_traceback() -> None:
+    if os.environ.get("MM_SERVER_DISABLE_RICH_TRACEBACK"):
+        return
+    try:
+        from rich.traceback import install
+
+        install(show_locals=False, width=100)
+    except Exception:
+        # Prefer resilience over fanciness: if Rich is missing keep default behavior
+        pass
+
+
+# Execute on import so that simply importing this module bootstraps the path and tracebacks.
 ensure_project_root_on_path()
+_install_rich_traceback()

@@ -757,7 +757,7 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     # Buttons row at the end
     btn_frame = ttk.Frame(frm)
-    btn_frame.grid(row=len(fields), column=6, columnspan=3, pady=14)
+    btn_frame.grid(row=row_index + 2, column=0, columnspan=3, pady=14, sticky="e")
     ttk.Button(btn_frame, text="Guardar", command=on_save).pack(side=tk.LEFT, padx=6)
     ttk.Button(btn_frame, text="Cancelar", command=on_cancel).pack(side=tk.LEFT, padx=6)
 

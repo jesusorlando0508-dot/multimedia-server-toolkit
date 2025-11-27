@@ -3,6 +3,9 @@ import logging.handlers
 import os
 import sys
 import threading
+from rich.console import Console
+from rich.logging import RichHandler
+
 from src.core.app_state import ui_queue
 from src.core.config import config
 
@@ -34,7 +37,7 @@ class QueueLoggingHandler(logging.Handler):
             pass
 
 
-def setup_ui_logging():
+def setup_ui_logging(rich_enabled: bool = True):
     """Attach UI logging handlers to the root logger and configure exception hooks.
 
     Settings taken from `config`:
@@ -60,6 +63,7 @@ def setup_ui_logging():
         fh.setLevel(logging.DEBUG)
         fh_formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
         fh.setFormatter(fh_formatter)
+        fh._preserve = True  # type: ignore[attr-defined]
         logger.addHandler(fh)
     except Exception:
         # ignore file handler errors
@@ -69,16 +73,25 @@ def setup_ui_logging():
     qh = QueueLoggingHandler()
     qh.setLevel(logging.DEBUG)
     qh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+    qh._preserve = True  # type: ignore[attr-defined]
     logger.addHandler(qh)
 
-    # Ensure there's a console/stream handler so messages also appear on stdout
-    try:
-        sh = logging.StreamHandler(stream=sys.stdout)
-        sh.setLevel(logging.INFO)
-        sh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
-        logger.addHandler(sh)
-    except Exception:
-        pass
+    if rich_enabled:
+        try:
+            console = Console(theme=None, emoji=True, highlight=False)
+            sh = RichHandler(console=console, show_path=False, log_time_format="%H:%M:%S")
+            sh.setLevel(logging.INFO)
+            logger.addHandler(sh)
+        except Exception:
+            pass
+    else:
+        try:
+            sh = logging.StreamHandler(stream=sys.stdout)
+            sh.setLevel(logging.INFO)
+            sh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+            logger.addHandler(sh)
+        except Exception:
+            pass
 
     # Also capture uncaught exceptions
     def excepthook(exc_type, exc_value, exc_tb):
