@@ -1,50 +1,40 @@
-import logging
-import threading
-from typing import Optional, TYPE_CHECKING, Any, cast, List
-from src.core.utils import dividir_texto, limpiar_traduccion
 import importlib
+import importlib.util
+import os
 import re
+import threading
+import logging
+import contextlib
 import time
-import textwrap
+from collections import OrderedDict
+from typing import Any, Optional, List, cast, TYPE_CHECKING
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# project imports
 from src.core.config import config
+from src.core.app_state import ui_queue
+from src.core.utils import dividir_texto, limpiar_traduccion
+from src.translator import translation_cache as _translation_cache
 from src.translator.translator_batcher import run_batched_translation
-try:
-    from src.core.app_state import ui_queue
-except Exception:
-    ui_queue = None
-from concurrent.futures import ThreadPoolExecutor
-from collections import OrderedDict
-import functools
-import contextlib
-import subprocess
-import shutil
-import os
 
-# Try to detect heavy ML deps (torch, sentencepiece). If missing, we will
-# avoid attempting to load the local Marian model and fall back gracefully.
-_HAVE_TORCH = False
-_HAVE_SENTENCEPIECE = False
-try:
-    importlib.import_module('torch')
-    _HAVE_TORCH = True
-except Exception:
-    _HAVE_TORCH = False
-try:
-    importlib.import_module('sentencepiece')
-    _HAVE_SENTENCEPIECE = True
-except Exception:
-    _HAVE_SENTENCEPIECE = False
+# expose cache helpers under expected names used by this module
+cache_get = _translation_cache.get
+cache_set = _translation_cache.set
+cache_batch_get = _translation_cache.batch_get
+cache_batch_set = _translation_cache.batch_set
 
-_MODEL_LOADING_FORBIDDEN = not (_HAVE_TORCH and _HAVE_SENTENCEPIECE)
-if not _MODEL_LOADING_FORBIDDEN:
-    try:
-        from transformers import MarianMTModel, MarianTokenizer
-    except Exception:
-        # If transformers import fails, mark model loading as forbidden
-        _MODEL_LOADING_FORBIDDEN = True
+# Try to detect heavy ML deps (torch, sentencepiece, transformers) without
+# importing them at module import time. Use importlib.util.find_spec which
+# does not execute module code and is cheap compared to importing torch.
+_HAVE_TORCH = importlib.util.find_spec('torch') is not None
+_HAVE_SENTENCEPIECE = importlib.util.find_spec('sentencepiece') is not None
+_HAVE_TRANSFORMERS = importlib.util.find_spec('transformers') is not None
+
+# If any required heavy dependency is missing, avoid eager model loading paths.
+_MODEL_LOADING_FORBIDDEN = not (_HAVE_TORCH and _HAVE_SENTENCEPIECE and _HAVE_TRANSFORMERS)
 
 # Simple session for translator (separate from main session to avoid coupling)
 
@@ -117,6 +107,8 @@ def ensure_model_loaded():
             source = _resolve_local_marian_source()
             logging.info("Cargando modelo de traducción por primera vez: %s", source)
             try:
+                # import heavy transformers classes lazily to avoid startup overhead
+                from transformers import MarianMTModel, MarianTokenizer
                 tokenizer = MarianTokenizer.from_pretrained(source)
                 model = MarianMTModel.from_pretrained(source)
                 # place model on configured device if torch is available
@@ -373,15 +365,21 @@ class LocalTranslator(TranslatorBase):
         total = len(all_parts)
 
         def cache_set(key, value):
-            # cast to plain dict for typing so Pylance accepts __setitem__ operations
-            cache: dict = cast(dict, self._part_cache)
+            # Use OrderedDict type so type checkers know move_to_end/popitem exist
+            cache: "OrderedDict[str, str]" = cast(OrderedDict, self._part_cache)
             if key in cache:
                 cache.move_to_end(key)
                 cache[key] = value
             else:
                 cache[key] = value
                 if len(cache) > cache_size:
-                    cache.popitem(last=False)
+                    # pop oldest item (LRU) in a type-safe way
+                    try:
+                        cache.popitem(last=False)
+                    except TypeError:
+                        # fallback for environments with unexpected signatures
+                        first_key = next(iter(cache))
+                        cache.pop(first_key, None)
 
         while idx < total:
             end = min(idx + batch_size, total)
@@ -630,9 +628,8 @@ class M2MTranslator(TranslatorBase):
     def _cache_set(cls, key, value):
         try:
             with cls._lock:
-                # cast to dict for typing; underlying is OrderedDict but we want
-                # to avoid Pylance issues with __setitem__ overloads
-                cache: dict = cast(dict, cls._part_cache)
+                # Use OrderedDict typing so Pylance recognizes move_to_end/popitem
+                cache: "OrderedDict[str, str]" = cast(OrderedDict, cls._part_cache)
                 if key in cache:
                     try:
                         cls._part_cache.move_to_end(key)
@@ -644,6 +641,10 @@ class M2MTranslator(TranslatorBase):
                     if len(cache) > getattr(cls, '_cache_size', 1024):
                         try:
                             cls._part_cache.popitem(last=False)
+                        except TypeError:
+                            # fallback if signature differs
+                            first = next(iter(cache))
+                            cache.pop(first, None)
                         except Exception:
                             pass
         except Exception:
@@ -1002,14 +1003,16 @@ class AventIQTranslator(TranslatorBase):
             except Exception:
                 pass
             cls._tokenizer = tokenizer  # FIX AVENTIQ
-            cls._pipeline = hf_pipeline(
+            # Cast pipeline factory to Any to avoid strict overload mismatch in type stubs
+            pipeline_factory = cast(Any, hf_pipeline)
+            cls._pipeline = pipeline_factory(
                 task='translation_en_to_es',
                 model=model,
                 tokenizer=tokenizer,
                 device=device_index,
                 max_length=cls._max_length,  # FIX AVENTIQ
                 num_beams=cls._num_beams,  # FIX AVENTIQ
-            )
+            )  # type: ignore[reportArgumentType,reportCallIssue]
 
     @classmethod
     def _cache_get(cls, key: str):
@@ -1024,12 +1027,21 @@ class AventIQTranslator(TranslatorBase):
     @classmethod
     def _cache_set(cls, key: str, value: str):
         try:
-            cache: dict = cast(dict, cls._part_cache)
+            cache: "OrderedDict[str, str]" = cast(OrderedDict, cls._part_cache)
             if key in cache:
-                cls._part_cache.move_to_end(key)
+                try:
+                    cls._part_cache.move_to_end(key)
+                except Exception:
+                    pass
             cache[key] = value
             if len(cache) > getattr(cls, '_cache_size', 512):
-                cls._part_cache.popitem(last=False)
+                try:
+                    cls._part_cache.popitem(last=False)
+                except TypeError:
+                    first = next(iter(cache))
+                    cache.pop(first, None)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1197,6 +1209,21 @@ def get_translator():
 
 def translator_translate(text, label_estado=None):
     try:
+        target_lang = config.get('translator_target_lang', 'es') or 'es'
+        # Try persistent cache first
+        try:
+            cached = cache_get(text, target_lang)
+            if cached is not None:
+                logging.debug("translator_translate: cache hit for text len=%d", len(text) if text else 0)
+                try:
+                    if ui_queue is not None:
+                        ui_queue.put(("translator_progress", "cache_hit", 1))
+                except Exception:
+                    pass
+                return cached
+        except Exception:
+            pass
+
         tr = get_translator()
         logging.debug("translator_translate: using %s for text len=%d", tr.__class__.__name__, len(text) if text else 0)
         # persistent debug trace
@@ -1207,6 +1234,11 @@ def translator_translate(text, label_estado=None):
         except Exception:
             pass
         res = tr.translate(text)
+        # save to persistent cache
+        try:
+            cache_set(text, target_lang, res)
+        except Exception:
+            pass
         logging.debug("translator_translate: result len=%d", len(res) if res else 0)
         try:
             debug_file = config.get('debug_log_file') or 'debug.log'
@@ -1225,8 +1257,38 @@ def translator_translate_batch(texts, label_estado=None):
         if texts is None:
             logging.warning("Translator batch called with None, returning empty list")
             return []
+        target_lang = config.get('translator_target_lang', 'es') or 'es'
+        # Prefetch persistent cache
+        try:
+            cached_map = cache_batch_get(texts, target_lang)
+        except Exception:
+            cached_map = {t: None for t in texts}
+
+        results = [None] * len(texts)
+        to_translate = []
+        to_translate_indices = []
+        hits = 0
+        for i, t in enumerate(texts):
+            c = cached_map.get(t)
+            if c is not None:
+                results[i] = c # pyright: ignore[reportCallIssue, reportArgumentType]
+                hits += 1
+            else:
+                to_translate.append(t)
+                to_translate_indices.append(i)
+
+        try:
+            if ui_queue is not None:
+                ui_queue.put(("translator_progress", "cache_summary", {"total": len(texts), "hits": hits, "misses": len(texts)-hits}))
+        except Exception:
+            pass
+
+        if not to_translate:
+            logging.debug("translator_translate_batch: all texts served from cache (%d/%d)", hits, len(texts))
+            return results
+
         tr = get_translator()
-        logging.debug("translator_translate_batch: using %s for %d texts", tr.__class__.__name__, len(texts))
+        logging.debug("translator_translate_batch: using %s for %d texts (to_translate=%d)", tr.__class__.__name__, len(texts), len(to_translate))
         try:
             debug_file = config.get('debug_log_file') or 'debug.log'
             with open(debug_file, 'a', encoding='utf-8') as df:
@@ -1242,18 +1304,40 @@ def translator_translate_batch(texts, label_estado=None):
         except Exception:
             max_attempts = 3
 
-        fallback_translate = getattr(tr, 'translate', None)
-        if not callable(fallback_translate):
+        _raw_fallback = getattr(tr, 'translate', None)
+        if callable(_raw_fallback):
+            # Wrap to ensure signature (str)->str for the batch runner and satisfy type checkers
+            def _fallback_fn(s: str) -> str:
+                try:
+                    return str(_raw_fallback(s))
+                except Exception:
+                    return s
+            fallback_translate = _fallback_fn
+        else:
             fallback_translate = None
 
-        res = run_batched_translation(
-            texts,
+        # Translate only the missing texts
+        translated_missing = run_batched_translation(
+            to_translate,
             translator=tr,
             label_estado=label_estado,
             chunk_size=chunk_size,
             max_attempts=max_attempts,
             fallback_translate=fallback_translate,
-        )
+        )  # type: ignore[reportArgumentType]
+
+        # persist newly translated results
+        try:
+            mapping = {t: translated_missing[i] for i, t in enumerate(to_translate)}
+            cache_batch_set(mapping, target_lang)  # type: ignore[reportCallIssue,reportArgumentType]
+        except Exception:
+            pass
+
+        # fill results
+        for pos, txt in enumerate(to_translate_indices):
+            results[txt] = translated_missing[pos] # pyright: ignore[reportCallIssue, reportArgumentType]
+
+        res = results
         try:
             debug_file = config.get('debug_log_file') or 'debug.log'
             with open(debug_file, 'a', encoding='utf-8') as df:

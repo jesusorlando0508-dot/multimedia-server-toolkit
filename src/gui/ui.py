@@ -37,12 +37,19 @@ try:
     from src.core import renombrar
 except Exception:
     renombrar = None
+try:
+    from src.translator.translation_cache import get_stats as translation_cache_get_stats
+except Exception:
+    translation_cache_get_stats = None
 
 # UI elements will be module-level so other helpers can reference them if needed
 root = None
 label_titulo = None
 label_sinopsis = None
 etiqueta_imagen = None
+label_cache_stats = None
+auto_monitor_win = None
+auto_monitor_items = {}
 
 
 def _safe_config(widget, **kwargs):
@@ -72,6 +79,22 @@ def process_ui_queue(root=None):
             _, widget, text = item
             try:
                 widget.config(text=text)
+            except Exception:
+                pass
+            # hide main generation buttons while run is active (so user won't start another full run)
+            try:
+                bm = globals().get('boton_manual')
+                ba = globals().get('boton_auto')
+                if bm:
+                    try:
+                        bm.pack_forget()
+                    except Exception:
+                        bm.config(state='disabled')
+                if ba:
+                    try:
+                        ba.pack_forget()
+                    except Exception:
+                        ba.config(state='disabled')
             except Exception:
                 pass
         elif action == "translation_status":
@@ -134,6 +157,90 @@ def process_ui_queue(root=None):
             _, title, msg = item
             try:
                 messagebox.showerror(title, msg)
+            except Exception:
+                pass
+        elif action == "translation_cache":
+            # payload: (action, value) e.g. ("translation_cache", "hit", text_snip)
+            try:
+                _, ev, payload = item
+            except Exception:
+                ev = None
+                payload = None
+            try:
+                process_ui_queue._cache_hits = getattr(process_ui_queue, '_cache_hits', 0)
+                process_ui_queue._cache_misses = getattr(process_ui_queue, '_cache_misses', 0)
+                process_ui_queue._cache_sets = getattr(process_ui_queue, '_cache_sets', 0)
+                if ev == 'hit':
+                    process_ui_queue._cache_hits += 1
+                elif ev == 'miss':
+                    process_ui_queue._cache_misses += 1
+                elif ev == 'set':
+                    process_ui_queue._cache_sets += 1
+                elif ev == 'batch_set' and isinstance(payload, int):
+                    process_ui_queue._cache_sets = getattr(process_ui_queue, '_cache_sets', 0) + int(payload)
+                # update label if present
+                if 'label_cache_stats' in globals() and globals().get('label_cache_stats') is not None:
+                    try:
+                        entries = None
+                        if translation_cache_get_stats is not None:
+                            try:
+                                stats = translation_cache_get_stats()
+                                entries = stats.get('entries')
+                            except Exception:
+                                entries = None
+                        hits = getattr(process_ui_queue, '_cache_hits', 0)
+                        misses = getattr(process_ui_queue, '_cache_misses', 0)
+                        sets = getattr(process_ui_queue, '_cache_sets', 0)
+                        if entries is None:
+                            globals()['label_cache_stats'].config(text=f"Cache: hits={hits} misses={misses} sets={sets}")
+                        else:
+                            globals()['label_cache_stats'].config(text=f"Cache: entries={entries} | hits={hits} misses={misses}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        elif action == "translator_progress":
+            # payloads: ("cache_hit", 1) or ("cache_summary", {total,hits,misses})
+            try:
+                _, kind, payload = item
+            except Exception:
+                kind = None
+                payload = None
+            try:
+                if kind == 'cache_hit':
+                    process_ui_queue._cache_hits = getattr(process_ui_queue, '_cache_hits', 0) + 1
+                elif kind == 'cache_summary' and isinstance(payload, dict):
+                    process_ui_queue._cache_hits = int(payload.get('hits', getattr(process_ui_queue, '_cache_hits', 0)))
+                    process_ui_queue._cache_misses = int(payload.get('misses', getattr(process_ui_queue, '_cache_misses', 0)))
+                # update label if exists
+                if 'label_cache_stats' in globals() and globals().get('label_cache_stats') is not None:
+                    try:
+                        hits = getattr(process_ui_queue, '_cache_hits', 0)
+                        misses = getattr(process_ui_queue, '_cache_misses', 0)
+                        globals()['label_cache_stats'].config(text=f"Cache: hits={hits} misses={misses}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        elif action == "auto_folder_update":
+            # payload: (action, folder_path, percent, status)
+            try:
+                _, folder, percent, status = item
+            except Exception:
+                folder = None
+                percent = None
+                status = None
+            try:
+                imap = globals().get('auto_monitor_items') or {}
+                entry = imap.get(folder)
+                if entry:
+                    lbl, pbar = entry
+                    try:
+                        if isinstance(percent, int):
+                            pbar['value'] = percent
+                        _safe_config(lbl, text=f"{os.path.basename(folder)} — {status} {'' if percent is None else f'({percent}%)'}") #type: ignore
+                    except Exception:
+                        pass
             except Exception:
                 pass
         elif action == "progress":
@@ -1067,6 +1174,13 @@ def main():
     label_provider = tk.Label(frame, text=f"Metadata: {config.get('metadata_provider', 'jikan')}")
     label_provider.pack(pady=2)
 
+    # Cache stats (hits/misses/entries) — updated via ui_queue events
+    try:
+        label_cache_stats = tk.Label(frame, text="Cache: entries=? hits=0 misses=0", font=("Arial", 9), fg="#444444")
+        label_cache_stats.pack(pady=2)
+    except Exception:
+        label_cache_stats = None
+
     # Dropdown en la ventana principal para seleccionar proveedor (jikan/tmdb)
     provider_frame = tk.Frame(frame)
     provider_frame.pack(pady=2)
@@ -1215,19 +1329,87 @@ def main():
         listbox_subcarpetas.pack(padx=10, pady=5, fill="both", expand=True)
 
         displayed_subcarpetas = list(subcarpetas)
+        # Keep a persistent set of selected folder paths even when filtering
+        globals()['auto_selected_folders'] = globals().get('auto_selected_folders', set())
+        # reentrancy guard for programmatic selection restoration
+        restoring_selection = {'flag': False}
 
         def refresh_listbox(*_):
             nonlocal displayed_subcarpetas
             term = search_var.get().strip().lower()
-            displayed_subcarpetas = []
+            # preserve a copy of currently visible items so we can map listbox indexes
+            old_displayed = list(displayed_subcarpetas)
+            # remember current selection in listbox to merge with global set
+            try:
+                current_idxs = listbox_subcarpetas.curselection()
+                for i in current_idxs:
+                    try:
+                        # map index to absolute folder using the old visible list
+                        if 0 <= i < len(old_displayed):
+                            globals()['auto_selected_folders'].add(old_displayed[i])
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # rebuild displayed list and UI entries
             listbox_subcarpetas.delete(0, tk.END)
+            displayed_subcarpetas = []
             for sc in subcarpetas:
                 name = os.path.basename(sc)
                 if term and term not in name.lower():
                     continue
                 displayed_subcarpetas.append(sc)
                 listbox_subcarpetas.insert(tk.END, name)
+            # restore selection for visible items if they were previously selected
+            try:
+                restoring_selection['flag'] = True
+                for idx, sc in enumerate(displayed_subcarpetas):
+                    if sc in globals().get('auto_selected_folders', set()):
+                        try:
+                            listbox_subcarpetas.selection_set(idx)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            finally:
+                try:
+                    restoring_selection['flag'] = False
+                except Exception:
+                    pass
 
+        # Update selection set when user changes selection
+        def on_listbox_select(event=None):
+            try:
+                # if we're restoring selection programmatically, ignore this event
+                if restoring_selection.get('flag'):
+                    return
+                sel = listbox_subcarpetas.curselection()
+                # add visible selected items to global set
+                for i in sel:
+                    try:
+                        folder = displayed_subcarpetas[int(i)]
+                        globals()['auto_selected_folders'].add(folder)
+                    except Exception:
+                        pass
+                # remove from global set any visible items that were unselected by user
+                # (we only remove items that are visible and not selected)
+                visible_set = set(displayed_subcarpetas)
+                visible_selected = set()
+                for i in sel:
+                    try:
+                        visible_selected.add(displayed_subcarpetas[int(i)])
+                    except Exception:
+                        pass
+                for v in visible_set - visible_selected:
+                    try:
+                        if v in globals().get('auto_selected_folders', set()):
+                            globals()['auto_selected_folders'].discard(v)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        listbox_subcarpetas.bind('<<ListboxSelect>>', on_listbox_select)
         search_var.trace_add('write', refresh_listbox)
         refresh_listbox()
 
@@ -1235,6 +1417,13 @@ def main():
         tk.Label(ventana, text="Selecciona idioma de los animes:", font=("Arial", 10)).pack(pady=(6,0))
         idioma_menu = ttk.Combobox(ventana, textvariable=idioma_seleccionado, values=["Japonés", "Español Latino", "Chino"], state="readonly")
         idioma_menu.pack(pady=4)
+        # Ensure changing language does not clear selections; only store choice
+        def on_idioma_change(evt=None):
+            try:
+                globals()['auto_selected_language'] = idioma_seleccionado.get()
+            except Exception:
+                pass
+        idioma_menu.bind('<<ComboboxSelected>>', on_idioma_change)
 
         # Options: renamer and extractor
         opts_frame = tk.Frame(ventana)
@@ -1333,6 +1522,108 @@ def main():
                 return
             carpetas_seleccionadas = [displayed_subcarpetas[i] for i in indices]
             ventana.destroy()
+            # Open Auto Run Monitor window
+            try:
+                win = tk.Toplevel(root)
+                win.title('Auto Run Monitor')
+                win.geometry('700x400')
+                frm = tk.Frame(win)
+                frm.pack(fill='both', expand=True, padx=8, pady=8)
+                canvas = tk.Canvas(frm)
+                vsb = tk.Scrollbar(frm, orient='vertical', command=canvas.yview)
+                inner = tk.Frame(canvas)
+                inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+                canvas.create_window((0,0), window=inner, anchor='nw')
+                canvas.configure(yscrollcommand=vsb.set)
+                canvas.pack(side='left', fill='both', expand=True)
+                vsb.pack(side='right', fill='y')
+                # create per-folder rows
+                globals()['auto_monitor_items'] = globals().get('auto_monitor_items', {})
+                for c in carpetas_seleccionadas:
+                    row = tk.Frame(inner)
+                    row.pack(fill='x', pady=2)
+                    lbl = tk.Label(row, text=os.path.basename(c), anchor='w')
+                    lbl.pack(side='left', fill='x', expand=True)
+                    p = ttk.Progressbar(row, orient='horizontal', length=150, mode='determinate')
+                    p.pack(side='right')
+                    globals()['auto_monitor_items'][c] = (lbl, p)
+                # close button
+                def close_monitor():
+                    try:
+                        globals()['auto_monitor_items'] = {}
+                        win.destroy()
+                    except Exception:
+                        pass
+                # Add folder during run button
+                def add_folder_during_run():
+                    try:
+                        new_folder = filedialog.askdirectory(title='Selecciona carpeta a agregar al run')
+                        if not new_folder:
+                            return
+                        # create UI row for the new folder
+                        try:
+                            row = tk.Frame(inner)
+                            row.pack(fill='x', pady=2)
+                            lbl = tk.Label(row, text=os.path.basename(new_folder), anchor='w')
+                            lbl.pack(side='left', fill='x', expand=True)
+                            p = ttk.Progressbar(row, orient='horizontal', length=150, mode='determinate')
+                            p.pack(side='right')
+                            globals()['auto_monitor_items'][new_folder] = (lbl, p)
+                        except Exception:
+                            pass
+
+                        def _run_added_folder(folder_path=new_folder):
+                            try:
+                                if ui_queue:
+                                    ui_queue.put(("auto_folder_update", folder_path, 0, "queued"))
+                                # simple lookup attempt; best-effort
+                                try:
+                                    anime_obj = buscar_anime_por_titulo(os.path.basename(folder_path), folder_path=folder_path)
+                                except TypeError:
+                                    try:
+                                        anime_obj = buscar_anime_por_titulo(os.path.basename(folder_path))
+                                    except Exception:
+                                        anime_obj = None
+                                except Exception:
+                                    anime_obj = None
+                                if ui_queue:
+                                    ui_queue.put(("auto_folder_update", folder_path, 0, "started"))
+                                # run generation for this single folder in background
+                                try:
+                                    page_builder.generar_en_hilo_con_tipo(
+                                        barra_progreso,
+                                        label_estado,
+                                        os.path.basename(folder_path),
+                                        folder_path,
+                                        anime_obj,
+                                        globals().get('auto_selected_language', 'Japonés'),
+                                        label_meta,
+                                        True,
+                                        label_titulo,
+                                        label_sinopsis,
+                                        etiqueta_imagen,
+                                        ui_queue,
+                                        root,
+                                        False,
+                                    )
+                                finally:
+                                    if ui_queue:
+                                        ui_queue.put(("auto_folder_update", folder_path, 100, "done"))
+                            except Exception as e:
+                                if ui_queue:
+                                    ui_queue.put(("debug_error", f"Error running added folder {folder_path}: {e}"))
+
+                        threading.Thread(target=_run_added_folder, daemon=True).start()
+                    except Exception:
+                        pass
+
+                btns_sub = tk.Frame(win)
+                btns_sub.pack(fill='x', padx=8, pady=(0,6))
+                tk.Button(btns_sub, text='Agregar carpeta', command=add_folder_during_run).pack(side='left', padx=6)
+                tk.Button(btns_sub, text='Cerrar monitor', command=close_monitor).pack(side='right', padx=6)
+                globals()['auto_monitor_win'] = win
+            except Exception:
+                pass
             # enable persistent control buttons for this run
             try:
                 btn_pause.config(state='normal')
@@ -1359,6 +1650,22 @@ def main():
                 # reset UI state when generation fully finished
                 try:
                     reset_ui_state()
+                except Exception:
+                    pass
+                # restore main generation buttons
+                try:
+                    bm = globals().get('boton_manual')
+                    ba = globals().get('boton_auto')
+                    if bm:
+                        try:
+                            bm.pack(pady=5)
+                        except Exception:
+                            bm.config(state='normal')
+                    if ba:
+                        try:
+                            ba.pack(pady=5)
+                        except Exception:
+                            ba.config(state='normal')
                 except Exception:
                     pass
                 process_ui_queue.on_generation_finished = None

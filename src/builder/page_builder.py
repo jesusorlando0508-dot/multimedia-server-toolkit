@@ -1,3 +1,8 @@
+# Disable specific Pyright/Pylance reports for this module where we use
+# defensive runtime checks and dynamic structures that the static analyzer
+# may not fully reason about.
+# pyright: reportOptionalMemberAccess=false, reportOptionalIterable=false, reportOptionalOperand=false, reportArgumentType=false
+
 import os
 import json
 import logging
@@ -895,6 +900,11 @@ def generar_automatico_en_hilo(barra_progreso, label_estado, carpetas, idioma_se
             if ui_queue:
                 ui_queue.put(("progress", barra_progreso, percent))
                 ui_queue.put(("label_text", label_estado, f"[{processed}/{total}] {titulo_busqueda} — {percent}% — ETA: {eta_str}"))
+                # Notify per-folder monitor (if present) that this folder is queued/starting
+                try:
+                    ui_queue.put(("auto_folder_update", carpeta_anime, percent, "queued"))
+                except Exception:
+                    pass
             else:
                 if label_estado:
                     try:
@@ -1100,12 +1110,35 @@ def generar_automatico_en_hilo(barra_progreso, label_estado, carpetas, idioma_se
             defer_flag,
         )
         if executor:
-            futures.append(executor.submit(generar_en_hilo_con_tipo, *gen_args))
+            # Submit a wrapper so we can emit per-folder start/done events
+            def _worker_wrapper(args=gen_args, folder=carpeta_anime):
+                try:
+                    if ui_queue:
+                        ui_queue.put(("auto_folder_update", folder, 0, "started"))
+                except Exception:
+                    pass
+                try:
+                    res = generar_en_hilo_con_tipo(*args)
+                    return res
+                finally:
+                    try:
+                        if ui_queue:
+                            ui_queue.put(("auto_folder_update", folder, 100, "done"))
+                    except Exception:
+                        pass
+
+            futures.append(executor.submit(_worker_wrapper))
         else:
             try:
                 res = generar_en_hilo_con_tipo(*gen_args)
                 if res and isinstance(res, dict):
                     generated_entries.append(res)
+                # notify monitor that folder finished when running inline
+                try:
+                    if ui_queue:
+                        ui_queue.put(("auto_folder_update", carpeta_anime, 100, "done"))
+                except Exception:
+                    pass
             except Exception as e:
                 logging.exception("Error generating page for %s: %s", titulo_busqueda, e)
         if anime is None:

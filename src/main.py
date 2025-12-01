@@ -18,11 +18,8 @@ except Exception:
             return list(seq)
 import re
 from typing import Any
-try:
-    from transformers import MarianMTModel, MarianTokenizer
-except Exception:
-    MarianMTModel = None
-    MarianTokenizer = None
+# NOTE: heavy ML libs (transformers/torch) are imported lazily in `src.translator`.
+# Avoid importing them at module import time here to prevent blocking startup.
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from PIL import Image, ImageTk
@@ -285,7 +282,9 @@ def _run_program_flow():
         ensure_initial_paths()
     except Exception:
         logging.exception("No se pudieron preparar las rutas iniciales")
-    if config.get('preload_translator_on_start', True):
+    # By default do NOT preload heavy translation models on start to avoid
+    # unnecessary CPU/RAM spikes on machines that don't need them.
+    if config.get('preload_translator_on_start', False):
         try:
             start_background_model_load()
         except Exception:

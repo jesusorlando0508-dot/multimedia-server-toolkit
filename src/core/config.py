@@ -5,10 +5,15 @@ from pathlib import Path
 from typing import Optional
 
 # === Paths base ===
-BASE = Path(__file__).resolve().parent
-# Store configuration inside a hidden folder in the project root so
-# everything seleccionado (rutas, credenciales) queda junto al repo.
-APP_DIR = BASE / ".vista"
+# Derive project root (two levels above `src/core`) so the hidden
+# app directory `.vista` lives at the repository root (where the
+# project is executed) instead of inside the `src` package.
+try:
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+except Exception:
+    PROJECT_ROOT = Path(__file__).resolve().parent
+# Store configuration inside a hidden folder at the project root
+APP_DIR = PROJECT_ROOT / ".vista"
 APP_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIG_PATH = APP_DIR / "config.json"
