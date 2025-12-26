@@ -898,9 +898,23 @@ def main():
                 if os.path.exists(CACHE_FILE):
                     os.remove(CACHE_FILE)
                 _ensure_cache()
-                messagebox.showinfo('Cache', 'Cache de metadata limpiada.')
             except Exception as e:
-                messagebox.showwarning('Cache', f'No se pudo limpiar la cache: {e}')
+                messagebox.showwarning('Cache', f'No se pudo limpiar la cache de metadata: {e}')
+                return
+            # also attempt to clear translation cache if available
+            try:
+                from src.translator import translation_cache as _translation_cache
+                try:
+                    summary = _translation_cache.clear()
+                    messagebox.showinfo('Cache', f"Cache de metadata limpiada. Traducciones persistentes eliminadas ({summary.get('entries',0)} entradas).")
+                    return
+                except Exception:
+                    # fallback: inform metadata cleared but translation cache not removed
+                    messagebox.showinfo('Cache', 'Cache de metadata limpiada. No se pudo limpiar cache de traducciones.')
+                    return
+            except Exception:
+                # translation cache module not available
+                messagebox.showinfo('Cache', 'Cache de metadata limpiada.')
 
     # The Ajustes action is available from the 'Archivo' menu. Remove the separate button to simplify the UI.
 

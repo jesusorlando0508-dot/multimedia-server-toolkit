@@ -115,8 +115,12 @@ def buscar_imagen_local(carpeta: str) -> Optional[str]:
 GENRE_MAP = {
     "Action": "Acción", "Adventure": "Aventura", "Comedy": "Comedia", "Drama": "Drama",
     "Romance": "Romance", "Fantasy": "Fantasía", "Horror": "Terror", "Sci-Fi": "Ciencia ficción",
-    "Mystery": "Misterio", "Music": "Música", "Sports": "Deportes", "Slice of Life": "Recuentos de la vida",
-    "Supernatural": "Sobrenatural", "Ecchi": "Ecchi", "Mecha": "Mecha", "Shounen": "Shounen",
+    "Science Fiction": "Ciencia ficción", "Mystery": "Misterio", "Music": "Música", "Sports": "Deportes",
+    "Slice of Life": "Recuentos de la vida", "Supernatural": "Sobrenatural", "Ecchi": "Ecchi", "Mecha": "Mecha",
+    "Shounen": "Shounen", "Family": "Familia", "Thriller": "Suspense", "Crime": "Crimen",
+    "History": "Histórico", "Documentary": "Documental", "Western": "Western", "Biography": "Biografía",
+    "Animation": "Animación", "Kids": "Infantil", "Talk": "Talk show", "Reality": "Reality",
+    "Sport": "Deporte", "Game-Show": "Concurso",
 }
 
 

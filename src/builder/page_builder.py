@@ -381,13 +381,12 @@ def merge_and_write_generated_entries(generated_entries: list) -> None:
                                 matched = ex
                                 break
                         if matched:
-                            # merge fields: only set fields that are missing or empty in existing
+                            # merge fields: overwrite existing fields with new values
                             for k, v in (new.items() if isinstance(new, dict) else []):
                                 try:
                                     if v is None:
                                         continue
-                                    if k not in matched or (not matched.get(k) and matched.get(k) != 0):
-                                        matched[k] = v
+                                    matched[k] = v
                                 except Exception:
                                     continue
                         else:
@@ -486,7 +485,48 @@ def traducir_lista(textos, label_estado=None, ui_queue=None):
                 ui_queue.put(("translation_status", f"Traduciendo {total} capítulos..."))
         except Exception:
             pass
-        traducciones = translator_translate_batch(textos_a_traducir, label_estado=label_estado)
+        # Special-case: when Argos Translate is the backend, fragment metadata by commas
+        # to avoid returning English phrases untouched for short compound strings
+        try:
+            import importlib.util
+            argos_present = importlib.util.find_spec('argostranslate') is not None
+        except Exception:
+            argos_present = False
+
+        if argos_present:
+            # Expand each text by splitting on commas (preserving order), translate parts,
+            # then rejoin. This reduces the chance Argos will keep the whole chunk in English.
+            expanded = []
+            mapping = []  # list of (orig_index, part_count)
+            for t in textos_a_traducir:
+                if not t or ',' not in t:
+                    expanded.append(t)
+                    mapping.append(1)
+                else:
+                    parts = [p.strip() for p in str(t).split(',') if p is not None]
+                    if not parts:
+                        expanded.append(t)
+                        mapping.append(1)
+                    else:
+                        for p in parts:
+                            expanded.append(p)
+                        mapping.append(len(parts))
+
+            translated_expanded = translator_translate_batch(expanded, label_estado=label_estado)
+            # rebuild translations per original
+            traducciones = []
+            pos = 0
+            for cnt in mapping:
+                if cnt == 1:
+                    traducciones.append(translated_expanded[pos])
+                    pos += 1
+                else:
+                    segment = translated_expanded[pos:pos+cnt]
+                    # join with comma and space to restore original separator
+                    traducciones.append(', '.join(s for s in segment if s))
+                    pos += cnt
+        else:
+            traducciones = translator_translate_batch(textos_a_traducir, label_estado=label_estado)
         try:
             if ui_queue is not None:
                 ui_queue.put(("translation_status", ""))

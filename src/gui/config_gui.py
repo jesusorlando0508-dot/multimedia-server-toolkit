@@ -17,10 +17,12 @@ from pathlib import Path
 import threading
 import time
 import importlib
+import importlib.util
 
 # external project modules (kept as in original so behavior doesn't change)
 import src.translator.translator
 import src.translator.translator_setup
+from src.core.cache import CACHE_FILE, _ensure_cache
 from src.core.config import load_config, save_config, save_secrets, save_env_key, CONFIG_PATH, SECRETS_PATH
 
 
@@ -227,7 +229,7 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     ttk.Label(adv_frame, text="Translator backend:").grid(row=adv_r, column=0, sticky=tk.W, pady=6)
     backend_var = tk.StringVar(value=existing_cfg.get("translator_backend", "local"))
-    ent_backend = ttk.Combobox(adv_frame, textvariable=backend_var, values=["auto", "local", "deepl", "m2m100", "aventiq"], state="readonly", width=20)
+    ent_backend = ttk.Combobox(adv_frame, textvariable=backend_var, values=["auto", "local", "deepl", "m2m100", "aventiq", "argos"], state="readonly", width=20)
     ent_backend.grid(row=adv_r, column=1, sticky="w", padx=6)
     entries["translator_backend"] = ent_backend
     lbl_mar_status = ttk.Label(adv_frame, text="Marian: ?")
@@ -244,6 +246,14 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
     adv_r += 1
     lbl_aventiq_status = ttk.Label(adv_frame, text="AventIQ: ?")
     lbl_aventiq_status.grid(row=adv_r, column=2, sticky="w", padx=6)
+    adv_r += 1
+    lbl_argos_status = ttk.Label(adv_frame, text="Argos: ?")
+    lbl_argos_status.grid(row=adv_r, column=2, sticky="w", padx=6)
+    try:
+        lbl_argos_experimental = ttk.Label(adv_frame, text="Experimental: puede traducir parcialmente algunos textos", foreground="orange")
+        lbl_argos_experimental.grid(row=adv_r, column=1, sticky="w", padx=6)
+    except Exception:
+        pass
 
     adv_r += 1
     ttk.Label(adv_frame, text="Proveedor de metadata (jikan/tmdb):").grid(row=adv_r, column=0, sticky=tk.W, pady=6)
@@ -284,6 +294,29 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
     ttk.Label(adv_frame, text="Pre-cargar traductor al iniciar:").grid(row=adv_r, column=0, sticky=tk.W, pady=6)
     chk_preload = ttk.Checkbutton(adv_frame, variable=preload_var)
     chk_preload.grid(row=adv_r, column=1, sticky="w", padx=6)
+
+    # Argos Translate (experimental) options
+    adv_r += 1
+    ttk.Separator(adv_frame, orient='horizontal').grid(row=adv_r, column=0, columnspan=3, sticky='ew', pady=(8,8))
+    adv_r += 1
+    ttk.Label(adv_frame, text="Argos Translate - Carpeta modelos:").grid(row=adv_r, column=0, sticky=tk.W, pady=6)
+    ent_argos_models = ttk.Entry(adv_frame, width=60)
+    ent_argos_models.grid(row=adv_r, column=1, sticky="we", padx=6)
+    ent_argos_models.insert(0, existing_cfg.get("argos_models_dir", "argos_models"))
+    entries["argos_models_dir"] = ent_argos_models
+    ttk.Button(adv_frame, text="Explorar...", command=lambda e=ent_argos_models: _browse_dir(e)).grid(row=adv_r, column=2, padx=6, sticky="w")
+
+    adv_r += 1
+    argos_auto_var = tk.BooleanVar(value=bool(existing_cfg.get("argos_auto_install_models", False)))
+    ttk.Label(adv_frame, text="Instalar modelos Argos automáticamente:").grid(row=adv_r, column=0, sticky=tk.W, pady=6)
+    chk_argos_auto = ttk.Checkbutton(adv_frame, variable=argos_auto_var)
+    chk_argos_auto.grid(row=adv_r, column=1, sticky="w", padx=6)
+    # Install now button + progress
+    btn_install_argos = ttk.Button(adv_frame, text="Instalar/Actualizar modelo Argos ahora")
+    btn_install_argos.grid(row=adv_r, column=2, padx=6, sticky="w")
+    adv_r += 1
+    argos_progress = ttk.Progressbar(adv_frame, mode="indeterminate", length=180)
+    argos_progress.grid(row=adv_r, column=1, sticky="w", padx=6)
 
     # system summary
     adv_r += 1
@@ -399,6 +432,37 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     pass
 
+                # Argos check
+                try:
+                    try:
+                        spec = importlib.util.find_spec('argostranslate')
+                        if spec is None:
+                            argos_note = 'No instalado (pip install argostranslate)'
+                        else:
+                            import argostranslate.translate as at
+                            langs = []
+                            try:
+                                langs = at.get_installed_languages() or []
+                            except Exception:
+                                langs = []
+                            target = existing_cfg.get('translator_target_lang', 'es') or 'es'
+                            has_pair = any(getattr(l, 'code', None) == 'en' for l in langs) and any(getattr(l, 'code', None) == target for l in langs)
+                            if has_pair:
+                                argos_note = 'Disponible (en->' + str(target) + ')'
+                            else:
+                                if bool(existing_cfg.get('argos_auto_install_models', False)):
+                                    argos_note = 'Disponible (instalará modelo en background)'
+                                else:
+                                    argos_note = 'Instalado pero sin modelo en->' + str(target)
+                    except Exception:
+                        argos_note = 'Error comprobando Argos'
+                except Exception:
+                    argos_note = 'Error'
+                try:
+                    lbl_argos_status.config(text=f"Argos: {argos_note}")
+                except Exception:
+                    pass
+
                 avail = ["deepl"]
                 if not mar_forbidden:
                     avail.insert(0, "local")
@@ -406,6 +470,13 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
                     avail.append("m2m100")
                 if aventiq_ok:
                     avail.append("aventiq")
+                try:
+                    # add Argos to available backends when package present
+                    argos_spec = importlib.util.find_spec('argostranslate')
+                    if argos_spec is not None:
+                        avail.append('argos')
+                except Exception:
+                    pass
                 try:
                     ent_backend.after(0, _update_backend_options, avail)
                 except Exception:
@@ -447,6 +518,79 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
                 _set_status("Prueba finalizada.", False)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    # Argos install action
+    def _install_argos_now() -> None:
+        def _worker():
+            try:
+                _set_status("Instalando modelo Argos...", True)
+
+                from src.translator.argos import ArgosTranslator
+                at = ArgosTranslator()
+                ui_q = None
+                try:
+                    from src.core.app_state import ui_queue as _ui_q
+                    ui_q = _ui_q
+                except Exception:
+                    ui_q = None
+
+                # determine target language
+                target = existing_cfg.get('translator_target_lang') or 'es'
+                try:
+                    res = at.install_package_for_target(from_code='en', to_code=target, ui_queue=ui_q, max_attempts=3)
+                except Exception as inst_err:
+                    res = {"success": False, "error": str(inst_err)}
+
+                if res.get('success'):
+                    msg = f"Argos: instalado {getattr(res.get('package'), 'name', '')} en {res.get('elapsed'):.1f}s"
+                    try:
+                        lbl_argos_status.config(text=f"Argos: Disponible (en->{target})")
+                    except Exception:
+                        pass
+                    try:
+                        messagebox.showinfo('Argos', msg)
+                    except Exception:
+                        pass
+                else:
+                    err = res.get('error') or 'Desconocido'
+                    try:
+                        lbl_argos_status.config(text=f"Argos: Error: {err}")
+                    except Exception:
+                        pass
+                    try:
+                        messagebox.showerror('Argos', f'Instalación falló: {err}')
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                try:
+                    messagebox.showerror('Argos', f'Error: {e}')
+                except Exception:
+                    pass
+            finally:
+                _set_status('Listo.', False)
+                try:
+                    argos_progress.stop()
+                except Exception:
+                    pass
+
+        # start progress and run worker in background
+        try:
+            try:
+                argos_progress.start(10)
+            except Exception:
+                pass
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception:
+            try:
+                messagebox.showerror('Argos', 'No se pudo iniciar la instalación en background')
+            except Exception:
+                pass
+
+    try:
+        btn_install_argos.config(command=_install_argos_now)
+    except Exception:
+        pass
 
     row_index += 1
 
@@ -626,6 +770,39 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
     verify_btn.grid(row=control_row, column=0, pady=8)
     test_btn = ttk.Button(frm, text="Probar traducción (A)", command=_do_translation_test)
     test_btn.grid(row=control_row, column=1, pady=8, sticky="w")
+    # Add a visible cache-clear button to advanced section
+    def _clear_caches() -> None:
+        try:
+            confirm = messagebox.askyesno("Limpiar cachés", "¿Desea eliminar la caché de metadata y la caché de traducciones persistente? Esto no afectará los archivos de datos (JSON).")
+            if not confirm:
+                return
+            # clear metadata cache
+            try:
+                if os.path.exists(CACHE_FILE):
+                    os.remove(CACHE_FILE)
+                _ensure_cache()
+            except Exception as e:
+                messagebox.showwarning("Limpiar cachés", f"No se pudo limpiar la cache de metadata: {e}")
+                return
+            # clear translation persistent cache if available
+            try:
+                from src.translator import translation_cache as _translation_cache
+                try:
+                    summary = _translation_cache.clear()
+                    messagebox.showinfo("Limpiar cachés", f"Cachés limpiadas. Traducciones eliminadas: {summary.get('entries', 0)} entradas.")
+                except Exception:
+                    messagebox.showinfo("Limpiar cachés", "Caché de metadata limpiada. No se pudo limpiar la caché de traducciones persistente.")
+            except Exception:
+                # translation cache module not available
+                messagebox.showinfo("Limpiar cachés", "Caché de metadata limpiada.")
+        except Exception as e:
+            try:
+                messagebox.showerror("Limpiar cachés", f"Error al limpiar caches: {e}")
+            except Exception:
+                pass
+
+    clear_btn = ttk.Button(frm, text="Limpiar cachés", command=_clear_caches)
+    clear_btn.grid(row=control_row, column=2, pady=8, sticky="e")
 
     # ------------------ Save/Cancel ------------------
     def on_save() -> None:
@@ -658,6 +835,10 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             new_cfg["preload_translator_on_start"] = bool(preload_var.get())
+        except Exception:
+            pass
+        try:
+            new_cfg["argos_auto_install_models"] = bool(argos_auto_var.get())
         except Exception:
             pass
         try:
@@ -728,6 +909,7 @@ def ensure_config_via_gui(existing_cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "media_root_dir", "pages_output_dir", "json_link_prefix",
                 "m2m_model_path", "m2m_model_name", "local_marian_model_path", "local_marian_model_name",
                 "aventiq_model_path", "aventiq_model_name", "translator_models_dir"
+                    , "argos_models_dir", "argos_auto_install_models"
             ]
             changes = []
             for k in tracked_keys:

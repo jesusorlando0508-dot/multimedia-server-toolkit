@@ -191,3 +191,46 @@ def get_stats() -> Dict[str, Any]:
         return {"entries": entries, "sample_keys": sample}
     except Exception:
         return {"entries": 0, "sample_keys": []}
+
+
+def clear() -> Dict[str, Any]:
+    """Clear the persistent translation cache file.
+
+    Returns a summary dict similar to `get_stats()` representing the
+    state before clearing (entries and sample_keys).
+    """
+    try:
+        path = _cache_path()
+        data = _load_cache()
+        summary = {"entries": len(data), "sample_keys": list(data.keys())[:5]}
+        # remove file under file lock to avoid races with writers
+        try:
+            with file_lock:
+                if path.exists():
+                    try:
+                        path.unlink()
+                    except Exception:
+                        try:
+                            # fallback to os.remove
+                            os.remove(str(path))
+                        except Exception:
+                            pass
+        except Exception:
+            # best-effort: try unlink without lock
+            try:
+                if path.exists():
+                    path.unlink()
+            except Exception:
+                try:
+                    if path.exists():
+                        os.remove(str(path))
+                except Exception:
+                    pass
+        try:
+            if ui_queue is not None:
+                ui_queue.put(("translation_cache", "cleared", summary.get('entries')))
+        except Exception:
+            pass
+        return summary
+    except Exception:
+        return {"entries": 0, "sample_keys": []}

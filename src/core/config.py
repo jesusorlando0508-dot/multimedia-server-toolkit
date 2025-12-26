@@ -53,6 +53,10 @@ DEFAULT_CONFIG = {
     "aventiq_model_name": "AventIQ-AI/English-To-Spanish",
     "aventiq_model_path": "",
     "translator_models_setup_done": False,
+    # Argos Translate (experimental) settings
+    "argos_auto_install_models": False,
+    "argos_models_dir": "argos_models",
+    "argos_model_name": "",
     "metadata_provider": "jikan",
     # default dev password so Dev Mode can be used without manual edits
     "dev_password": "",

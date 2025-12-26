@@ -317,9 +317,9 @@ def runner_entry(argv: list[str] | None = None) -> int:
     context, _, _ = _collect_runner_context(args)
     friendly_banner(
         context,
-        title="Hola, manada multimedia",
-        subtitle="Calentando patitas para explorar tus carpetas",
-        emoji="🐶",
+        title="Iniciando",
+        subtitle="Explorando carpetas nuevas",
+        emoji="🚀",
     )
 
     media_root = args.media_root or config.get('media_root_dir')
@@ -352,7 +352,7 @@ def runner_entry(argv: list[str] | None = None) -> int:
     elapsed = time.perf_counter() - start_time
     save_state(state_path, seen_folders)
     _render_dashboards(context, "Despedida", len(new_folders))
-    friendly_footer(context, elapsed, summary="Gracias por dejarme cuidar tu biblioteca 🐾")
+    friendly_footer(context, elapsed, summary="Ejecución finalizada")
     return exit_code
 
 
